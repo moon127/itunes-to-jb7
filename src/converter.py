@@ -1,12 +1,27 @@
+import re
 import shutil
 from pathlib import Path
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
-from .scanner import AlbumInfo
+from .scanner import AlbumInfo, TrackInfo
+
+DISC_PREFIX_RE = re.compile(r'^(\d+)-(\d+)\s')
 
 
-def make_jb7_dirname(artist: str, album: str) -> str:
-    return f"{artist}   {album}"
+def _parse_disc_prefix(filename: str) -> Tuple[Optional[int], str]:
+    match = DISC_PREFIX_RE.match(filename)
+    if match:
+        disc_num = int(match.group(1))
+        clean = filename[match.start(2):]
+        return disc_num, clean
+    return None, filename
+
+
+def make_jb7_dirname(artist: str, album: str, disc_num: Optional[int] = None) -> str:
+    base = f"{artist}   {album}"
+    if disc_num is not None:
+        base = f"{base} CD{disc_num}"
+    return base.replace('_', '-')
 
 
 def convert_album(
@@ -14,28 +29,41 @@ def convert_album(
     dest_base: Path,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> int:
-    jb7_dirname = make_jb7_dirname(album.artist, album.name)
-    dest_dir = dest_base / jb7_dirname
-    dest_dir.mkdir(parents=True, exist_ok=True)
+    disc_tracks: Dict[Optional[int], List[Tuple[TrackInfo, str]]] = {}
+    for track in album.tracks:
+        disc_num, clean_name = _parse_disc_prefix(track.filename)
+        clean_name = clean_name.replace('_', '-')
+        disc_tracks.setdefault(disc_num, []).append((track, clean_name))
 
     copied = 0
-    for track in album.tracks:
-        src = Path(track.filepath)
-        dest = dest_dir / track.filename
+    for disc_num, tracks in disc_tracks.items():
+        jb7_dirname = make_jb7_dirname(album.artist, album.name, disc_num)
+        dest_dir = dest_base / jb7_dirname
+        dest_dir.mkdir(parents=True, exist_ok=True)
 
-        if not src.exists():
-            if progress_callback:
-                progress_callback(f"Source not found: {track.filename}")
-            continue
+        for track, dest_name in tracks:
+            src = Path(track.filepath)
+            dest = dest_dir / dest_name
 
-        try:
-            shutil.copy2(str(src), str(dest))
-            copied += 1
-            if progress_callback:
-                progress_callback(f"Copied: {track.filename}")
-        except (IOError, OSError) as e:
-            if progress_callback:
-                progress_callback(f"Error: {track.filename} - {e}")
+            if not src.exists():
+                if progress_callback:
+                    progress_callback(f"Source not found: {track.filename}")
+                continue
+
+            try:
+                shutil.copy2(str(src), str(dest))
+                copied += 1
+                if progress_callback:
+                    progress_callback(f"Copied: {dest_name}")
+            except (IOError, OSError):
+                try:
+                    shutil.copy(str(src), str(dest))
+                    copied += 1
+                    if progress_callback:
+                        progress_callback(f"Copied (no metadata): {dest_name}")
+                except (IOError, OSError) as e2:
+                    if progress_callback:
+                        progress_callback(f"Error: {track.filename} - {e2}")
 
     return copied
 

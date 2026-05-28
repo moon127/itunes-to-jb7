@@ -1,7 +1,9 @@
 import os
 from pathlib import Path
 
-from src.converter import make_jb7_dirname, convert_album, convert_selected
+from src.converter import (
+    make_jb7_dirname, convert_album, convert_selected, _parse_disc_prefix,
+)
 from src.scanner import TrackInfo, AlbumInfo
 
 
@@ -17,6 +19,51 @@ class TestMakeJB7Dirname:
 
     def test_special_chars(self):
         assert make_jb7_dirname("Artist/Name", "Album:1") == "Artist/Name   Album:1"
+
+    def test_with_disc_num(self):
+        assert make_jb7_dirname("Artist", "Album", 1) == "Artist   Album CD1"
+        assert make_jb7_dirname("Artist", "Album", 12) == "Artist   Album CD12"
+
+    def test_underscore_in_artist(self):
+        assert make_jb7_dirname("Some_Artist", "Album") == "Some-Artist   Album"
+
+    def test_underscore_in_album(self):
+        assert make_jb7_dirname("Artist", "Greatest_Hits") == "Artist   Greatest-Hits"
+
+    def test_underscore_with_disc(self):
+        assert make_jb7_dirname("Some_Artist", "Greatest_Hits", 2) == "Some-Artist   Greatest-Hits CD2"
+
+
+class TestParseDiscPrefix:
+    def test_single_disc(self):
+        disc, clean = _parse_disc_prefix("1-01 Song.mp3")
+        assert disc == 1
+        assert clean == "01 Song.mp3"
+
+    def test_double_disc(self):
+        disc, clean = _parse_disc_prefix("12-03 Song.mp3")
+        assert disc == 12
+        assert clean == "03 Song.mp3"
+
+    def test_no_prefix(self):
+        disc, clean = _parse_disc_prefix("01 Song.mp3")
+        assert disc is None
+        assert clean == "01 Song.mp3"
+
+    def test_no_prefix_plain(self):
+        disc, clean = _parse_disc_prefix("Song.mp3")
+        assert disc is None
+        assert clean == "Song.mp3"
+
+    def test_disc_with_two_digit_track(self):
+        disc, clean = _parse_disc_prefix("2-123 Song.mp3")
+        assert disc == 2
+        assert clean == "123 Song.mp3"
+
+    def test_underscore_not_mistaken_for_dash(self):
+        disc, clean = _parse_disc_prefix("1_01 Song.mp3")
+        assert disc is None
+        assert clean == "1_01 Song.mp3"
 
 
 class TestConvertAlbum:
@@ -87,7 +134,7 @@ class TestConvertAlbum:
         assert any("Source not found" in m for m in messages)
         assert any("gone.mp3" in m for m in messages)
 
-    def test_io_error(self, tmp_path, monkeypatch):
+    def test_copy2_fallback_to_copy(self, tmp_path, monkeypatch):
         src_dir = tmp_path / "src" / "Artist" / "Album"
         src_dir.mkdir(parents=True)
         test_file = src_dir / "01 Track.mp3"
@@ -95,7 +142,7 @@ class TestConvertAlbum:
         dest_dir = tmp_path / "dest"
 
         def mock_copy2(*args, **kwargs):
-            raise IOError("Disk full")
+            raise IOError("Operation not permitted")
 
         monkeypatch.setattr("shutil.copy2", mock_copy2)
 
@@ -109,9 +156,39 @@ class TestConvertAlbum:
         album = AlbumInfo("Album", "Artist", tracks)
 
         count = convert_album(album, dest_dir)
-        assert count == 0
+        assert count == 1
+        assert (dest_dir / "Artist   Album" / "01 Track.mp3").exists()
 
-    def test_io_error_with_callback(self, tmp_path, monkeypatch):
+    def test_copy2_fallback_with_callback(self, tmp_path, monkeypatch):
+        src_dir = tmp_path / "src" / "Artist" / "Album"
+        src_dir.mkdir(parents=True)
+        test_file = src_dir / "01 Track.mp3"
+        test_file.write_bytes(b"data")
+        dest_dir = tmp_path / "dest"
+
+        def mock_copy2(*args, **kwargs):
+            raise IOError("Operation not permitted")
+
+        monkeypatch.setattr("shutil.copy2", mock_copy2)
+
+        tracks = [
+            TrackInfo(
+                "01 Track.mp3",
+                str(test_file),
+                "MP3", False, True, 4,
+            ),
+        ]
+        album = AlbumInfo("Album", "Artist", tracks)
+        messages = []
+
+        def cb(msg):
+            messages.append(msg)
+
+        count = convert_album(album, dest_dir, cb)
+        assert count == 1
+        assert any("no metadata" in m for m in messages)
+
+    def test_both_copy_fail(self, tmp_path, monkeypatch):
         src_dir = tmp_path / "src" / "Artist" / "Album"
         src_dir.mkdir(parents=True)
         test_file = src_dir / "01 Track.mp3"
@@ -121,7 +198,39 @@ class TestConvertAlbum:
         def mock_copy2(*args, **kwargs):
             raise IOError("Disk full")
 
+        def mock_copy(*args, **kwargs):
+            raise IOError("Disk full")
+
         monkeypatch.setattr("shutil.copy2", mock_copy2)
+        monkeypatch.setattr("shutil.copy", mock_copy)
+
+        tracks = [
+            TrackInfo(
+                "01 Track.mp3",
+                str(test_file),
+                "MP3", False, True, 4,
+            ),
+        ]
+        album = AlbumInfo("Album", "Artist", tracks)
+
+        count = convert_album(album, dest_dir)
+        assert count == 0
+
+    def test_both_copy_fail_with_callback(self, tmp_path, monkeypatch):
+        src_dir = tmp_path / "src" / "Artist" / "Album"
+        src_dir.mkdir(parents=True)
+        test_file = src_dir / "01 Track.mp3"
+        test_file.write_bytes(b"data")
+        dest_dir = tmp_path / "dest"
+
+        def mock_copy2(*args, **kwargs):
+            raise IOError("Disk full")
+
+        def mock_copy(*args, **kwargs):
+            raise IOError("Disk full")
+
+        monkeypatch.setattr("shutil.copy2", mock_copy2)
+        monkeypatch.setattr("shutil.copy", mock_copy)
 
         tracks = [
             TrackInfo(
@@ -172,9 +281,6 @@ class TestConvertAlbum:
         count = convert_album(album, dest_dir)
         assert count == 0
 
-        jb7_dir = dest_dir / "Artist   Album"
-        assert jb7_dir.exists()
-
     def test_multiple_formats(self, tmp_path):
         src_dir = tmp_path / "src" / "Artist" / "Album"
         src_dir.mkdir(parents=True)
@@ -197,6 +303,114 @@ class TestConvertAlbum:
         assert (jb7_dir / "01 T.mp3").read_bytes() == b"mp3"
         assert (jb7_dir / "02 T.flac").read_bytes() == b"flac"
         assert (jb7_dir / "03 T.m4a").read_bytes() == b"m4a"
+
+    def test_multi_disc_album(self, tmp_path):
+        src_dir = tmp_path / "src" / "Artist" / "Greatest Hits"
+        src_dir.mkdir(parents=True)
+        (src_dir / "1-01 Song A.mp3").write_bytes(b"disc1_1")
+        (src_dir / "1-02 Song B.mp3").write_bytes(b"disc1_2")
+        (src_dir / "2-01 Song C.mp3").write_bytes(b"disc2_1")
+        (src_dir / "2-02 Song D.mp3").write_bytes(b"disc2_2")
+        dest_dir = tmp_path / "dest"
+
+        tracks = [
+            TrackInfo("1-01 Song A.mp3", str(src_dir / "1-01 Song A.mp3"), "MP3", False, True, 8),
+            TrackInfo("1-02 Song B.mp3", str(src_dir / "1-02 Song B.mp3"), "MP3", False, True, 8),
+            TrackInfo("2-01 Song C.mp3", str(src_dir / "2-01 Song C.mp3"), "MP3", False, True, 8),
+            TrackInfo("2-02 Song D.mp3", str(src_dir / "2-02 Song D.mp3"), "MP3", False, True, 8),
+        ]
+        album = AlbumInfo("Greatest Hits", "Artist", tracks)
+
+        count = convert_album(album, dest_dir)
+        assert count == 4
+
+        cd1 = dest_dir / "Artist   Greatest Hits CD1"
+        cd2 = dest_dir / "Artist   Greatest Hits CD2"
+        assert (cd1 / "01 Song A.mp3").exists()
+        assert (cd1 / "02 Song B.mp3").exists()
+        assert (cd2 / "01 Song C.mp3").exists()
+        assert (cd2 / "02 Song D.mp3").exists()
+        assert (cd1 / "01 Song A.mp3").read_bytes() == b"disc1_1"
+        assert (cd2 / "01 Song C.mp3").read_bytes() == b"disc2_1"
+
+    def test_multi_disc_callback(self, tmp_path):
+        src_dir = tmp_path / "src" / "Artist" / "Hits"
+        src_dir.mkdir(parents=True)
+        (src_dir / "1-01 A.mp3").write_bytes(b"a")
+        (src_dir / "2-01 B.mp3").write_bytes(b"b")
+        dest_dir = tmp_path / "dest"
+
+        tracks = [
+            TrackInfo("1-01 A.mp3", str(src_dir / "1-01 A.mp3"), "MP3", False, True, 1),
+            TrackInfo("2-01 B.mp3", str(src_dir / "2-01 B.mp3"), "MP3", False, True, 1),
+        ]
+        album = AlbumInfo("Hits", "Artist", tracks)
+        messages = []
+
+        def cb(msg):
+            messages.append(msg)
+
+        count = convert_album(album, dest_dir, cb)
+        assert count == 2
+        assert any("Copied: 01 A.mp3" in m for m in messages)
+        assert any("Copied: 01 B.mp3" in m for m in messages)
+
+    def test_underscore_in_filename(self, tmp_path):
+        src_dir = tmp_path / "src" / "Artist" / "Album"
+        src_dir.mkdir(parents=True)
+        (src_dir / "01_Track.mp3").write_bytes(b"data")
+        dest_dir = tmp_path / "dest"
+
+        tracks = [
+            TrackInfo("01_Track.mp3", str(src_dir / "01_Track.mp3"), "MP3", False, True, 4),
+        ]
+        album = AlbumInfo("Album", "Artist", tracks)
+
+        count = convert_album(album, dest_dir)
+        assert count == 1
+
+        jb7_dir = dest_dir / "Artist   Album"
+        assert (jb7_dir / "01-Track.mp3").exists()
+        assert not (jb7_dir / "01_Track.mp3").exists()
+
+    def test_underscore_in_artist_and_album(self, tmp_path):
+        src_dir = tmp_path / "src" / "Some_Artist" / "Greatest_Hits"
+        src_dir.mkdir(parents=True)
+        (src_dir / "01 Song.mp3").write_bytes(b"data")
+        dest_dir = tmp_path / "dest"
+
+        tracks = [
+            TrackInfo("01 Song.mp3", str(src_dir / "01 Song.mp3"), "MP3", False, True, 4),
+        ]
+        album = AlbumInfo("Greatest_Hits", "Some_Artist", tracks)
+
+        count = convert_album(album, dest_dir)
+        assert count == 1
+
+        jb7_dir = dest_dir / "Some-Artist   Greatest-Hits"
+        assert jb7_dir.exists()
+        assert (jb7_dir / "01 Song.mp3").exists()
+
+    def test_mixed_disc_and_plain_tracks(self, tmp_path):
+        src_dir = tmp_path / "src" / "Artist" / "Album"
+        src_dir.mkdir(parents=True)
+        (src_dir / "1-01 Disc Track.mp3").write_bytes(b"disc")
+        (src_dir / "02 Plain Track.mp3").write_bytes(b"plain")
+        dest_dir = tmp_path / "dest"
+
+        tracks = [
+            TrackInfo("1-01 Disc Track.mp3", str(src_dir / "1-01 Disc Track.mp3"), "MP3", False, True, 4),
+            TrackInfo("02 Plain Track.mp3", str(src_dir / "02 Plain Track.mp3"), "MP3", False, True, 5),
+        ]
+        album = AlbumInfo("Album", "Artist", tracks)
+
+        count = convert_album(album, dest_dir)
+        assert count == 2
+
+        cd1 = dest_dir / "Artist   Album CD1"
+        plain = dest_dir / "Artist   Album"
+        assert (cd1 / "01 Disc Track.mp3").exists()
+        assert (plain / "02 Plain Track.mp3").exists()
 
 
 class TestConvertSelected:

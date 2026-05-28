@@ -206,6 +206,12 @@ class TestHasTrackNumber:
     def test_leading_zero(self):
         assert has_track_number("001 Track.mp3") is True
 
+    def test_disc_prefix(self):
+        assert has_track_number("1-01 Track.mp3") is True
+
+    def test_disc_prefix_two_digit(self):
+        assert has_track_number("12-01 Track.mp3") is True
+
 
 class TestAlbumInfo:
     def test_track_count_ok(self):

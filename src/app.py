@@ -76,7 +76,7 @@ class JB7Converter(tk.Tk):
         self.summary_text.pack(fill=tk.X, padx=2, pady=2)
 
         alert_frame = ttk.Frame(self.summary_frame)
-        alert_frame.pack(fill=tk.X, pady=2)
+        alert_frame.pack(fill=tk.X, pady=(2, 0))
 
         self.btn_protected = ttk.Button(
             alert_frame, text="View Protected Albums...",
@@ -95,6 +95,39 @@ class JB7Converter(tk.Tk):
             command=self._show_untracked, state=tk.DISABLED
         )
         self.btn_untracked.pack(side=tk.LEFT, padx=2)
+
+        self.btn_view_clean = ttk.Button(
+            alert_frame, text="View Clean Albums...",
+            command=self._show_clean, state=tk.DISABLED
+        )
+        self.btn_view_clean.pack(side=tk.LEFT, padx=2)
+
+        select_frame = ttk.Frame(self.summary_frame)
+        select_frame.pack(fill=tk.X, pady=(0, 2))
+
+        self.btn_sel_clean = ttk.Button(
+            select_frame, text="Select Clean",
+            command=self._select_clean, state=tk.DISABLED
+        )
+        self.btn_sel_clean.pack(side=tk.LEFT, padx=2)
+
+        self.btn_sel_protected = ttk.Button(
+            select_frame, text="Select Protected",
+            command=self._select_protected, state=tk.DISABLED
+        )
+        self.btn_sel_protected.pack(side=tk.LEFT, padx=2)
+
+        self.btn_sel_small = ttk.Button(
+            select_frame, text="Select Small",
+            command=self._select_small, state=tk.DISABLED
+        )
+        self.btn_sel_small.pack(side=tk.LEFT, padx=2)
+
+        self.btn_sel_untracked = ttk.Button(
+            select_frame, text="Select Untracked",
+            command=self._select_untracked, state=tk.DISABLED
+        )
+        self.btn_sel_untracked.pack(side=tk.LEFT, padx=2)
 
         content_frame = ttk.Frame(self, padding="5")
         content_frame.pack(fill=tk.BOTH, expand=True)
@@ -181,6 +214,11 @@ class JB7Converter(tk.Tk):
         self.btn_protected.config(state=tk.DISABLED)
         self.btn_small.config(state=tk.DISABLED)
         self.btn_untracked.config(state=tk.DISABLED)
+        self.btn_view_clean.config(state=tk.DISABLED)
+        self.btn_sel_clean.config(state=tk.DISABLED)
+        self.btn_sel_protected.config(state=tk.DISABLED)
+        self.btn_sel_small.config(state=tk.DISABLED)
+        self.btn_sel_untracked.config(state=tk.DISABLED)
 
         min_tracks = self.min_tracks_var.get()
 
@@ -225,13 +263,13 @@ class JB7Converter(tk.Tk):
             else:
                 type_parts.append(f"{ftype}: {free}")
 
+        total_albums = sum(len(albums) for albums in r.artists.values())
         self.summary_text.insert(
-            tk.END, f"Total audio files: {r.total_files}\n"
+            tk.END, f"Total audio files: {r.total_files} in {total_albums} album(s)\n"
         )
         self.summary_text.insert(tk.END, " | ".join(type_parts) + "\n")
 
-        has_warnings = False
-
+        flagged: set = set()
         if r.protected_albums:
             total_protected = sum(
                 sum(1 for t in a.tracks if t.drm_protected)
@@ -244,9 +282,12 @@ class JB7Converter(tk.Tk):
                 "warning",
             )
             self.btn_protected.config(state=tk.NORMAL)
-            has_warnings = True
+            self.btn_sel_protected.config(state=tk.NORMAL)
+            for a in r.protected_albums:
+                flagged.add((a.artist, a.name))
         else:
             self.btn_protected.config(state=tk.DISABLED)
+            self.btn_sel_protected.config(state=tk.DISABLED)
 
         if r.small_albums:
             self.summary_text.insert(
@@ -256,9 +297,12 @@ class JB7Converter(tk.Tk):
                 "warning",
             )
             self.btn_small.config(state=tk.NORMAL)
-            has_warnings = True
+            self.btn_sel_small.config(state=tk.NORMAL)
+            for a in r.small_albums:
+                flagged.add((a.artist, a.name))
         else:
             self.btn_small.config(state=tk.DISABLED)
+            self.btn_sel_small.config(state=tk.DISABLED)
 
         if r.untracked_albums:
             self.summary_text.insert(
@@ -268,16 +312,28 @@ class JB7Converter(tk.Tk):
                 "warning",
             )
             self.btn_untracked.config(state=tk.NORMAL)
-            has_warnings = True
+            self.btn_sel_untracked.config(state=tk.NORMAL)
+            for a in r.untracked_albums:
+                flagged.add((a.artist, a.name))
         else:
             self.btn_untracked.config(state=tk.DISABLED)
+            self.btn_sel_untracked.config(state=tk.DISABLED)
 
-        if not has_warnings:
+        clean_count = total_albums - len(flagged)
+        if clean_count > 0 and total_albums > 0:
             self.summary_text.insert(
-                tk.END, "\n\u2713 No issues detected - library looks clean"
+                tk.END,
+                f"\n\u2713 {clean_count} album(s) clean - ready to convert",
+                "clean",
             )
+            self.btn_view_clean.config(state=tk.NORMAL)
+            self.btn_sel_clean.config(state=tk.NORMAL)
+        else:
+            self.btn_view_clean.config(state=tk.DISABLED)
+            self.btn_sel_clean.config(state=tk.DISABLED)
 
         self.summary_text.tag_config("warning", foreground="red")
+        self.summary_text.tag_config("clean", foreground="green")
         self.summary_text.config(state=tk.DISABLED)
 
     def _populate_tree(self):
@@ -415,6 +471,80 @@ class JB7Converter(tk.Tk):
             for child in self.tree.get_children(item_id):
                 self.tree.set(child, "select", UNCHECKED)
 
+    def _select_matching_albums(self, predicate) -> None:
+        self._deselect_all()
+        if not self.scan_result:
+            return
+        for artist_name, albums in self.scan_result.artists.items():
+            for album_name, album in albums.items():
+                if predicate(album):
+                    if artist_name not in self.selected_albums:
+                        self.selected_albums[artist_name] = set()
+                    self.selected_albums[artist_name].add(album_name)
+        self._sync_tree_selection()
+
+    def _sync_tree_selection(self) -> None:
+        for item_id in self.tree.get_children():
+            children = self.tree.get_children(item_id)
+            for child in children:
+                tags = self.tree.item(child, "tags")
+                if len(tags) >= 3:
+                    artist = tags[1]
+                    album = tags[2]
+                    if artist in self.selected_albums and album in self.selected_albums[artist]:
+                        self.tree.set(child, "select", CHECKED)
+                    else:
+                        self.tree.set(child, "select", UNCHECKED)
+            if children:
+                self._update_artist_check(item_id)
+
+    def _select_clean(self):
+        r = self.scan_result
+        if not r:
+            return
+        flagged: set = set()
+        for a in r.protected_albums:
+            flagged.add((a.artist, a.name))
+        for a in r.small_albums:
+            flagged.add((a.artist, a.name))
+        for a in r.untracked_albums:
+            flagged.add((a.artist, a.name))
+
+        def is_clean(album):
+            return (album.artist, album.name) not in flagged
+
+        self._select_matching_albums(is_clean)
+
+    def _select_protected(self):
+        if not self.scan_result:
+            return
+        flagged = {(a.artist, a.name) for a in self.scan_result.protected_albums}
+
+        def is_in(album):
+            return (album.artist, album.name) in flagged
+
+        self._select_matching_albums(is_in)
+
+    def _select_small(self):
+        if not self.scan_result:
+            return
+        flagged = {(a.artist, a.name) for a in self.scan_result.small_albums}
+
+        def is_in(album):
+            return (album.artist, album.name) in flagged
+
+        self._select_matching_albums(is_in)
+
+    def _select_untracked(self):
+        if not self.scan_result:
+            return
+        flagged = {(a.artist, a.name) for a in self.scan_result.untracked_albums}
+
+        def is_in(album):
+            return (album.artist, album.name) in flagged
+
+        self._select_matching_albums(is_in)
+
     def _collect_selected_albums(self):
         selected = {}
         if not self.scan_result:
@@ -517,6 +647,23 @@ class JB7Converter(tk.Tk):
     def _set_converting(self, val: bool):
         self._converting = val
 
+    def _show_clean(self):
+        if not self.scan_result:
+            return
+        flagged: set = set()
+        for a in self.scan_result.protected_albums:
+            flagged.add((a.artist, a.name))
+        for a in self.scan_result.small_albums:
+            flagged.add((a.artist, a.name))
+        for a in self.scan_result.untracked_albums:
+            flagged.add((a.artist, a.name))
+        clean = [
+            a for artist_albums in self.scan_result.artists.values()
+            for a in artist_albums.values()
+            if (a.artist, a.name) not in flagged
+        ]
+        self._show_album_dialog("Clean Albums", clean, None)
+
     def _show_protected(self):
         if self.scan_result:
             self._show_album_dialog(
@@ -568,7 +715,38 @@ class JB7Converter(tk.Tk):
         text.tag_config("highlight", foreground="red", font=("", 10, "bold"))
         text.config(state=tk.DISABLED)
 
-        ttk.Button(dialog, text="Close", command=dialog.destroy).pack(pady=5)
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(pady=5)
+        ttk.Button(
+            btn_frame, text="Save as text file...",
+            command=lambda: self._save_dialog_text(title, albums, highlight_filter),
+        ).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Close", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
+
+    def _save_dialog_text(self, title: str, albums, highlight_filter=None) -> None:
+        lines = [f"{title}\n", f"{'=' * len(title)}\n\n"]
+        for album in albums:
+            lines.append(f"{album.artist} / {album.name}\n")
+            for track in album.tracks:
+                flag = ""
+                if highlight_filter and highlight_filter(track):
+                    flag = "  [FLAGGED]"
+                lines.append(f"  {track.filename}{flag}\n")
+            lines.append("\n")
+
+        path = filedialog.asksaveasfilename(
+            title="Save report",
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+            initialfile=f"{title.lower().replace(' ', '_')}.txt",
+        )
+        if not path:
+            return
+        try:
+            with open(path, "w") as f:
+                f.writelines(lines)
+        except (IOError, OSError) as e:
+            messagebox.showerror("Save Error", f"Could not write file:\n{e}")
 
 
 def main():

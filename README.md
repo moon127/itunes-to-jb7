@@ -3,6 +3,8 @@
 A Python/tkinter application that converts an iTunes Music Library into the
 hardfi format required by a Brennan JB7 audio player.
 
+<img width="1018" height="878" alt="Screenshot 2026-05-29 at 09 52 34" src="https://github.com/user-attachments/assets/02f97c66-9a24-48ed-9da1-3ae8e51272e5" />
+
 ## Features
 
 - Scans an iTunes Music directory (`Artist/Album/track` structure)

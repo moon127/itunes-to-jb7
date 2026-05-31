@@ -63,6 +63,17 @@ class JB7Converter(tk.Tk):
             textvariable=self.min_tracks_var, width=5
         ).pack(side=tk.LEFT, padx=5)
 
+        ttk.Separator(opt_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=5)
+
+        self.suffix_enabled = tk.BooleanVar(value=False)
+        self.suffix_text = tk.StringVar(value="[DL]")
+        ttk.Checkbutton(
+            opt_frame, text="Dir suffix:", variable=self.suffix_enabled,
+        ).pack(side=tk.LEFT)
+        ttk.Entry(
+            opt_frame, textvariable=self.suffix_text, width=10,
+        ).pack(side=tk.LEFT, padx=(0, 5))
+
         ttk.Button(
             opt_frame, text="Scan Library", command=self._scan_library
         ).pack(side=tk.RIGHT, padx=5)
@@ -574,6 +585,7 @@ class JB7Converter(tk.Tk):
             messagebox.showerror("Error", "Please select a destination directory")
             return
 
+        suffix = self.suffix_text.get().strip() if self.suffix_enabled.get() else ""
         selected = self._collect_selected_albums()
         if not selected:
             messagebox.showinfo("No Selection", "Please select albums to convert")
@@ -626,7 +638,7 @@ class JB7Converter(tk.Tk):
 
         def worker():
             try:
-                total = convert_selected(selected, dest, progress_callback)
+                total = convert_selected(selected, dest, progress_callback, suffix)
                 self.after(0, self._on_convert_complete, total)
             except Exception as e:
                 self.after(0, messagebox.showerror, "Conversion Error", str(e))

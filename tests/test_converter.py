@@ -34,6 +34,16 @@ class TestMakeJB7Dirname:
         assert make_jb7_dirname("Some_Artist", "Greatest_Hits", 2) == "Some-Artist   Greatest-Hits CD2"
 
 
+    def test_with_suffix(self):
+        assert make_jb7_dirname("Artist", "Album", suffix="[DL]") == "Artist   Album [DL]"
+
+    def test_with_suffix_and_disc(self):
+        assert make_jb7_dirname("Artist", "Album", disc_num=1, suffix="[DL]") == "Artist   Album CD1 [DL]"
+
+    def test_empty_suffix(self):
+        assert make_jb7_dirname("Artist", "Album", suffix="") == "Artist   Album"
+
+
 class TestParseDiscPrefix:
     def test_single_disc(self):
         disc, clean = _parse_disc_prefix("1-01 Song.mp3")
@@ -412,6 +422,56 @@ class TestConvertAlbum:
         assert (cd1 / "01 Disc Track.mp3").exists()
         assert (plain / "02 Plain Track.mp3").exists()
 
+    def test_suffix_applied(self, tmp_path):
+        src_dir = tmp_path / "src" / "Artist" / "Album"
+        src_dir.mkdir(parents=True)
+        (src_dir / "01 Track.mp3").write_bytes(b"data")
+        dest_dir = tmp_path / "dest"
+
+        tracks = [
+            TrackInfo("01 Track.mp3", str(src_dir / "01 Track.mp3"), "MP3", False, True, 4),
+        ]
+        album = AlbumInfo("Album", "Artist", tracks)
+
+        count = convert_album(album, dest_dir, suffix="[DL]")
+        assert count == 1
+
+        assert (dest_dir / "Artist   Album [DL]" / "01 Track.mp3").exists()
+
+    def test_suffix_with_disc(self, tmp_path):
+        src_dir = tmp_path / "src" / "Artist" / "Album"
+        src_dir.mkdir(parents=True)
+        (src_dir / "1-01 Track.mp3").write_bytes(b"data")
+        dest_dir = tmp_path / "dest"
+
+        tracks = [
+            TrackInfo("1-01 Track.mp3", str(src_dir / "1-01 Track.mp3"), "MP3", False, True, 4),
+        ]
+        album = AlbumInfo("Album", "Artist", tracks)
+
+        count = convert_album(album, dest_dir, suffix="[DL]")
+        assert count == 1
+
+        assert (dest_dir / "Artist   Album CD1 [DL]" / "01 Track.mp3").exists()
+
+    def test_suffix_with_callback(self, tmp_path):
+        src_dir = tmp_path / "src" / "Artist" / "Album"
+        src_dir.mkdir(parents=True)
+        (src_dir / "01 Track.mp3").write_bytes(b"data")
+        dest_dir = tmp_path / "dest"
+
+        tracks = [
+            TrackInfo("01 Track.mp3", str(src_dir / "01 Track.mp3"), "MP3", False, True, 4),
+        ]
+        album = AlbumInfo("Album", "Artist", tracks)
+
+        def cb(msg):
+            pass
+
+        count = convert_album(album, dest_dir, cb, suffix="[X]")
+        assert count == 1
+        assert (dest_dir / "Artist   Album [X]" / "01 Track.mp3").exists()
+
 
 class TestConvertSelected:
     def test_multiple_albums(self, tmp_path):
@@ -479,6 +539,20 @@ class TestConvertSelected:
         assert any("Processing: Artist / Album" in m for m in messages)
         assert any("Copied: 01 T.mp3" in m for m in messages)
         assert any("Copied: 02 T.mp3" in m for m in messages)
+
+    def test_selected_with_suffix(self, tmp_path):
+        d = tmp_path / "src" / "Artist" / "Album"
+        d.mkdir(parents=True)
+        (d / "01 T.mp3").write_bytes(b"d")
+        album = AlbumInfo("Album", "Artist", [
+            TrackInfo("01 T.mp3", str(d / "01 T.mp3"), "MP3", False, True, 1),
+        ])
+        selected = {"Artist": {"Album": album}}
+        dest_dir = tmp_path / "dest"
+
+        total = convert_selected(selected, str(dest_dir), suffix="[DL]")
+        assert total == 1
+        assert (dest_dir / "Artist   Album [DL]" / "01 T.mp3").exists()
 
     def test_preserves_metadata(self, tmp_path):
         src_dir = tmp_path / "src" / "Artist" / "Album"

@@ -17,10 +17,14 @@ def _parse_disc_prefix(filename: str) -> Tuple[Optional[int], str]:
     return None, filename
 
 
-def make_jb7_dirname(artist: str, album: str, disc_num: Optional[int] = None) -> str:
+def make_jb7_dirname(
+    artist: str, album: str, disc_num: Optional[int] = None, suffix: str = "",
+) -> str:
     base = f"{artist}   {album}"
     if disc_num is not None:
         base = f"{base} CD{disc_num}"
+    if suffix:
+        base = f"{base} {suffix}"
     return base.replace('_', '-')
 
 
@@ -28,6 +32,7 @@ def convert_album(
     album: AlbumInfo,
     dest_base: Path,
     progress_callback: Optional[Callable[[str], None]] = None,
+    suffix: str = "",
 ) -> int:
     disc_tracks: Dict[Optional[int], List[Tuple[TrackInfo, str]]] = {}
     for track in album.tracks:
@@ -37,7 +42,7 @@ def convert_album(
 
     copied = 0
     for disc_num, tracks in disc_tracks.items():
-        jb7_dirname = make_jb7_dirname(album.artist, album.name, disc_num)
+        jb7_dirname = make_jb7_dirname(album.artist, album.name, disc_num, suffix)
         dest_dir = dest_base / jb7_dirname
         dest_dir.mkdir(parents=True, exist_ok=True)
 
@@ -72,6 +77,7 @@ def convert_selected(
     selected: Dict[str, Dict[str, AlbumInfo]],
     dest_dir: str,
     progress_callback: Optional[Callable[[str], None]] = None,
+    suffix: str = "",
 ) -> int:
     dest_path = Path(dest_dir)
     dest_path.mkdir(parents=True, exist_ok=True)
@@ -81,6 +87,6 @@ def convert_selected(
         for album_name, album in albums.items():
             if progress_callback:
                 progress_callback(f"Processing: {artist} / {album_name}")
-            total += convert_album(album, dest_path, progress_callback)
+            total += convert_album(album, dest_path, progress_callback, suffix)
 
     return total
